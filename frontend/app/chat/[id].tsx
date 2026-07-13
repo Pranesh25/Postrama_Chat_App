@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, Pressable, TextInput, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, FlatList, Pressable, TextInput, KeyboardAvoidingView, Platform, ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -9,6 +9,7 @@ import { Image } from 'expo-image';
 import { useAuth } from '@/src/context/AuthContext';
 import { useChat, Message } from '@/src/context/ChatContext';
 import { Avatar } from '@/src/components/Avatar';
+import { AudioBubble, useMessageSpeech } from '@/src/components/AudioBubble';
 import { theme } from '@/src/theme';
 
 function timeStr(iso: string) {
@@ -25,7 +26,9 @@ export default function ChatRoom() {
   const insets = useSafeAreaInsets();
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
+  const [invisible, setInvisible] = useState(false);
   const listRef = useRef<FlatList>(null);
+  const { playingId, toggle: togglePlay, stop: stopPlay } = useMessageSpeech();
 
   const chat = useMemo(() => chats.find((c) => c.chat_id === chatId), [chats, chatId]);
   const other = chat && !chat.is_group ? chat.members.find((m) => m.user_id !== user?.user_id) : null;
@@ -35,6 +38,8 @@ export default function ChatRoom() {
 
   useEffect(() => { loadMessages(chatId); }, [chatId, loadMessages]);
   useEffect(() => { if (list.length > 0) markRead(chatId); }, [list.length, chatId, markRead]);
+  useEffect(() => { if (!invisible) stopPlay(); }, [invisible, stopPlay]);
+  useEffect(() => () => stopPlay(), [stopPlay]);
 
   const scrollToEnd = () => setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 50);
 
@@ -79,6 +84,28 @@ export default function ChatRoom() {
     const prev = index > 0 ? list[index - 1] : null;
     const showAvatar = !mine && chat?.is_group && (!prev || prev.sender_id !== item.sender_id);
     const readByOther = chat && item.read_by.some((u) => u !== user?.user_id);
+
+    // In invisible mode: transform text messages into audio bubbles.
+    if (invisible && item.text) {
+      return (
+        <View style={[styles.msgRow, mine ? styles.msgRight : styles.msgLeft]}>
+          {!mine && chat?.is_group && (
+            <View style={{ width: 32, marginRight: 8 }}>
+              {showAvatar && <Avatar name={senderInfo?.name} uri={senderInfo?.picture} size={32} />}
+            </View>
+          )}
+          <AudioBubble
+            text={item.text}
+            mine={mine}
+            seed={item.message_id}
+            currentPlayingId={playingId}
+            onToggle={togglePlay}
+            timeLabel={timeStr(item.created_at)}
+          />
+        </View>
+      );
+    }
+
     return (
       <View style={[styles.msgRow, mine ? styles.msgRight : styles.msgLeft]}>
         {!mine && chat?.is_group && (
@@ -127,11 +154,41 @@ export default function ChatRoom() {
           <Text style={styles.headerSub}>
             {typingUsers.length > 0
               ? 'typing…'
-              : chat?.is_group
-                ? `${chat.members.length} members`
-                : other?.online ? 'online' : 'offline'}
+              : invisible
+                ? '🔇 Invisible mode'
+                : chat?.is_group
+                  ? `${chat.members.length} members`
+                  : other?.online ? 'online' : 'offline'}
           </Text>
         </View>
+        <Pressable
+          testID="call-audio-button"
+          onPress={() => Alert.alert('Audio call', 'Voice calls are coming soon.')}
+          style={styles.headerIconBtn}
+        >
+          <Ionicons name="call" size={20} color={theme.color.onSurface} />
+        </Pressable>
+        <Pressable
+          testID="call-video-button"
+          onPress={() => Alert.alert('Video call', 'Video calls are coming soon.')}
+          style={styles.headerIconBtn}
+        >
+          <Ionicons name="videocam" size={22} color={theme.color.onSurface} />
+        </Pressable>
+        <Pressable
+          testID="invisible-toggle"
+          onPress={() => {
+            setInvisible((v) => !v);
+            try { Haptics.selectionAsync(); } catch {}
+          }}
+          style={[styles.invisibleBtn, invisible && styles.invisibleBtnOn]}
+        >
+          <Ionicons
+            name={invisible ? 'eye-off' : 'eye-outline'}
+            size={18}
+            color={invisible ? '#fff' : theme.color.onSurface}
+          />
+        </Pressable>
       </View>
 
       <KeyboardAvoidingView
