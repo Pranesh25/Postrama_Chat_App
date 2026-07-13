@@ -10,9 +10,10 @@ import { useAuth } from '@/src/context/AuthContext';
 import { theme } from '@/src/theme';
 
 export default function Login() {
-  const { signIn, user } = useAuth();
+  const { signIn, demoSignIn, user } = useAuth();
   const router = useRouter();
   const [loading, setLoading] = useState(false);
+  const [demoLoading, setDemoLoading] = useState(false);
   const [debug, setDebug] = useState<string>('');
 
   useEffect(() => { if (user) router.replace('/chats'); }, [user, router]);
@@ -116,6 +117,26 @@ export default function Login() {
             </>
           )}
         </Pressable>
+        <Pressable
+          testID="try-demo-button"
+          onPress={async () => {
+            setDemoLoading(true);
+            try { await demoSignIn(); router.replace('/chats'); }
+            catch (e: any) { Alert.alert('Demo error', e?.message || 'Try again'); }
+            finally { setDemoLoading(false); }
+          }}
+          disabled={demoLoading}
+          style={({ pressed }) => [styles.demoBtn, pressed && { opacity: 0.7 }]}
+        >
+          {demoLoading ? (
+            <ActivityIndicator color={theme.color.brand} />
+          ) : (
+            <>
+              <Ionicons name="sparkles" size={18} color={theme.color.brand} />
+              <Text style={styles.demoBtnText}>Try Demo (no sign-in)</Text>
+            </>
+          )}
+        </Pressable>
         <Text style={styles.terms}>By continuing you agree to our Terms & Privacy Policy</Text>
         {debug ? <Text testID="auth-debug" style={styles.debug}>{debug}</Text> : null}
       </View>
@@ -134,6 +155,8 @@ const styles = StyleSheet.create({
   footer: { padding: theme.space.xl, paddingBottom: theme.space.xxl },
   btn: { backgroundColor: theme.color.onSurface, borderRadius: theme.radius.pill, height: 56, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 12 },
   btnText: { color: '#fff', fontSize: 16, fontFamily: theme.font.body, fontWeight: '600' },
+  demoBtn: { marginTop: theme.space.md, height: 52, borderRadius: theme.radius.pill, borderWidth: 1.5, borderColor: theme.color.brand, backgroundColor: 'transparent', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 10 },
+  demoBtnText: { color: theme.color.brand, fontSize: 15, fontFamily: theme.font.body, fontWeight: '700' },
   terms: { textAlign: 'center', color: theme.color.onSurfaceTertiary, marginTop: theme.space.md, fontSize: 12, fontFamily: theme.font.body },
   debug: { marginTop: theme.space.md, fontFamily: 'Courier', fontSize: 10, color: theme.color.onSurfaceTertiary, textAlign: 'left' },
 });

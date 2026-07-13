@@ -498,6 +498,151 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
 
 
 # ============= Startup =============
+MOCK_USERS = [
+    {"user_id": "mock_alice", "email": "alice@bubble.app", "name": "Alice Chen", "picture": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&q=80"},
+    {"user_id": "mock_bob", "email": "bob@bubble.app", "name": "Bob Martinez", "picture": "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200&q=80"},
+    {"user_id": "mock_sarah", "email": "sarah@bubble.app", "name": "Sarah Kim", "picture": "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=200&q=80"},
+    {"user_id": "mock_david", "email": "david@bubble.app", "name": "David Park", "picture": "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=200&q=80"},
+    {"user_id": "mock_emma", "email": "emma@bubble.app", "name": "Emma Wilson", "picture": "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=200&q=80"},
+]
+
+
+async def ensure_mock_users():
+    for m in MOCK_USERS:
+        await db.users.update_one(
+            {"user_id": m["user_id"]},
+            {"$setOnInsert": {**m, "online": False, "last_seen": now_utc(), "created_at": now_utc()}},
+            upsert=True,
+        )
+
+
+async def seed_demo_chats_for(user_id: str):
+    """Seed 4 rich chats for a given user, only if they don't exist yet."""
+    existing = await db.chats.count_documents({"members": user_id, "demo": True})
+    if existing > 0:
+        return
+
+    now = now_utc()
+
+    def ago(minutes: int) -> datetime:
+        return now - timedelta(minutes=minutes)
+
+    # Chat 1: Alice - direct
+    c1_id = f"chat_{uuid.uuid4().hex[:12]}"
+    c1_msgs = [
+        ("mock_alice", "Hey! How was your weekend? ☀️", 60 * 24 * 2),
+        (user_id, "It was great, hiked the ridge trail!", 60 * 24 * 2 - 5),
+        ("mock_alice", "No way, I've been wanting to do that", 60 * 24 * 2 - 8),
+        ("mock_alice", "How long did it take?", 60 * 24 * 2 - 8),
+        (user_id, "About 4 hours round trip", 60 * 24 * 2 - 10),
+        (user_id, "Views were unreal 🏔️", 60 * 24 * 2 - 10),
+        ("mock_alice", "Ok I'm in. This weekend?", 60 * 24 - 30),
+        (user_id, "Saturday morning?", 60 * 24 - 20),
+        ("mock_alice", "Perfect. 7am parking lot?", 15),
+        ("mock_alice", "Bring water and snacks ✌️", 8),
+    ]
+    # Chat 2: Bob - work
+    c2_id = f"chat_{uuid.uuid4().hex[:12]}"
+    c2_msgs = [
+        ("mock_bob", "Did you see the latest mock from the design team?", 60 * 5),
+        (user_id, "Yeah, the coral is 🔥", 60 * 5 - 3),
+        ("mock_bob", "Agreed. I think we ship Friday.", 60 * 5 - 5),
+        ("mock_bob", "Can you review PR #482 when you get a sec?", 60 * 3),
+        (user_id, "On it", 60 * 3 - 2),
+        (user_id, "Left some comments, mostly nits", 60 * 2),
+        ("mock_bob", "Thanks! Addressing them now", 45),
+        ("mock_bob", "Merged 🚀", 3),
+    ]
+    # Chat 3: Weekend Trip group
+    c3_id = f"chat_{uuid.uuid4().hex[:12]}"
+    c3_msgs = [
+        ("mock_sarah", "Ok trip fam, who's driving? 🚗", 60 * 24),
+        ("mock_alice", "I can drive if we take my car", 60 * 24 - 5),
+        ("mock_bob", "Sarah + Alice = pilots. I'll DJ", 60 * 24 - 10),
+        (user_id, "🎧 emergency snack purchases only please", 60 * 24 - 12),
+        ("mock_sarah", "Rented the cabin! 3 bedrooms, hot tub, mountain views", 60 * 8),
+        ("mock_sarah", "$62/person for 3 nights", 60 * 8),
+        ("mock_alice", "Steal ✨", 60 * 8 - 2),
+        (user_id, "Venmo incoming", 60 * 8 - 3),
+        ("mock_bob", "What time we heading out Friday?", 60 * 2),
+        ("mock_sarah", "3pm from Alice's place", 60),
+        ("mock_alice", "See you Friday 🥳", 20),
+    ]
+    # Chat 4: Family group
+    c4_id = f"chat_{uuid.uuid4().hex[:12]}"
+    c4_msgs = [
+        ("mock_emma", "Sunday dinner at 6? Bringing lasagna 🍝", 60 * 24 * 3),
+        ("mock_david", "Yes please!!", 60 * 24 * 3 - 15),
+        (user_id, "I'll bring wine 🍷", 60 * 24 * 3 - 20),
+        ("mock_emma", "Perfect", 60 * 24 * 3 - 25),
+        ("mock_david", "Mom asked if you got her voicemail?", 60 * 24),
+        (user_id, "Yes! Calling her tonight", 60 * 24 - 2),
+        ("mock_emma", "She misses you 💕", 60 * 24 - 5),
+        ("mock_david", "Btw did anyone see grandpa's photo album?", 60 * 6),
+        ("mock_emma", "It's on the shelf in the living room I think", 60 * 6 - 3),
+        (user_id, "I moved it upstairs, sorry! Will bring Sunday", 60 * 3),
+        ("mock_emma", "You're the best 🌟", 30),
+    ]
+
+    chats_to_insert = [
+        {"chat_id": c1_id, "is_group": False, "name": None,
+         "members": [user_id, "mock_alice"], "msgs": c1_msgs},
+        {"chat_id": c2_id, "is_group": False, "name": None,
+         "members": [user_id, "mock_bob"], "msgs": c2_msgs},
+        {"chat_id": c3_id, "is_group": True, "name": "Weekend Trip 🏖️",
+         "members": [user_id, "mock_alice", "mock_bob", "mock_sarah"], "msgs": c3_msgs},
+        {"chat_id": c4_id, "is_group": True, "name": "Family",
+         "members": [user_id, "mock_david", "mock_emma"], "msgs": c4_msgs},
+    ]
+
+    for c in chats_to_insert:
+        last_msg = c["msgs"][-1]
+        last_at = ago(last_msg[2])
+        await db.chats.insert_one({
+            "chat_id": c["chat_id"], "is_group": c["is_group"], "name": c["name"],
+            "members": c["members"], "created_by": user_id,
+            "created_at": ago(60 * 24 * 5),
+            "last_message": last_msg[1][:200], "last_message_at": last_at, "last_sender_id": last_msg[0],
+            "demo": True,
+        })
+        for sender, text, mins_ago in c["msgs"]:
+            await db.messages.insert_one({
+                "message_id": f"msg_{uuid.uuid4().hex[:12]}",
+                "chat_id": c["chat_id"], "sender_id": sender,
+                "text": text, "image": None,
+                "created_at": ago(mins_ago),
+                "read_by": [sender] + ([user_id] if sender != user_id and mins_ago > 30 else []),
+            })
+
+
+@api_router.post("/demo-login")
+async def demo_login():
+    """Instantly log in as a fresh Demo User with pre-seeded chats. No OAuth needed."""
+    await ensure_mock_users()
+    demo_uid = f"demo_{uuid.uuid4().hex[:10]}"
+    demo_email = f"{demo_uid}@bubble.app"
+    await db.users.insert_one({
+        "user_id": demo_uid,
+        "email": demo_email,
+        "name": "You (Demo)",
+        "picture": None,
+        "online": False,
+        "last_seen": now_utc(),
+        "created_at": now_utc(),
+        "is_demo": True,
+    })
+    session_token = f"demo_{uuid.uuid4().hex}"
+    await db.user_sessions.insert_one({
+        "session_token": session_token,
+        "user_id": demo_uid,
+        "created_at": now_utc(),
+        "expires_at": now_utc() + timedelta(days=1),
+    })
+    await seed_demo_chats_for(demo_uid)
+    user = await db.users.find_one({"user_id": demo_uid}, {"_id": 0})
+    return {"session_token": session_token, "user": _clean_user(user)}
+
+
 @app.on_event("startup")
 async def on_startup():
     await db.users.create_index("email", unique=True)
@@ -509,6 +654,7 @@ async def on_startup():
     await db.chats.create_index("members")
     await db.messages.create_index("chat_id")
     await db.messages.create_index("message_id", unique=True)
+    await ensure_mock_users()
 
 
 @app.on_event("shutdown")

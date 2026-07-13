@@ -18,6 +18,7 @@ type AuthState = {
   token: string | null;
   loading: boolean;
   signIn: (session_id: string) => Promise<void>;
+  demoSignIn: () => Promise<void>;
   signOut: () => Promise<void>;
   setUser: (u: User) => void;
 };
@@ -84,6 +85,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUserState(data.user);
   }, []);
 
+  const demoSignIn = useCallback(async () => {
+    const r = await fetch(`${API}/api/demo-login`, { method: 'POST' });
+    if (!r.ok) throw new Error('Demo login failed');
+    const data = await r.json();
+    await storeToken(data.session_token);
+    setToken(data.session_token);
+    setUserState(data.user);
+  }, []);
+
   const signOut = useCallback(async () => {
     if (token) {
       try {
@@ -96,7 +106,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [token]);
 
   return (
-    <AuthCtx.Provider value={{ user, token, loading, signIn, signOut, setUser: setUserState }}>
+    <AuthCtx.Provider value={{ user, token, loading, signIn, demoSignIn, signOut, setUser: setUserState }}>
       {children}
     </AuthCtx.Provider>
   );
