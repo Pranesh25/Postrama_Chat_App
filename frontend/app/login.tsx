@@ -13,15 +13,23 @@ export default function Login() {
   const { signIn, user } = useAuth();
   const router = useRouter();
   const [loading, setLoading] = useState(false);
+  const [debug, setDebug] = useState<string>('');
 
   useEffect(() => { if (user) router.replace('/chats'); }, [user, router]);
 
+  const log = (s: string) => {
+    console.log('[auth]', s);
+    setDebug((d) => (d + '\n' + s).split('\n').slice(-6).join('\n'));
+  };
+
   const processSessionId = useCallback(async (sid: string) => {
+    log(`processing session_id=${sid.slice(0, 8)}…`);
     setLoading(true);
     try {
       await signIn(sid);
       router.replace('/chats');
     } catch (e: any) {
+      log(`signIn error: ${e?.message}`);
       Alert.alert('Sign in failed', e?.message || 'Please try again');
     } finally { setLoading(false); }
   }, [signIn, router]);
@@ -59,17 +67,30 @@ export default function Login() {
     setLoading(true);
     try {
       const redirect = Platform.OS === 'web' ? window.location.origin + '/' : Linking.createURL('');
+      log(`redirect=${redirect}`);
       const authUrl = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirect)}`;
       if (Platform.OS === 'web') {
         window.location.href = authUrl;
         return;
       }
       const result = await WebBrowser.openAuthSessionAsync(authUrl, redirect);
+      log(`result.type=${result.type}`);
       if (result.type === 'success' && result.url) {
+        log(`result.url=${result.url.slice(0, 80)}`);
         const m = result.url.match(/session_id=([^&]+)/);
-        if (m) await processSessionId(decodeURIComponent(m[1]));
+        if (m) {
+          await processSessionId(decodeURIComponent(m[1]));
+        } else {
+          log('no session_id in result.url');
+          Alert.alert('Sign in failed', 'No session id returned. Redirect: ' + result.url);
+        }
+      } else if (result.type !== 'success') {
+        // On some Android builds openAuthSessionAsync returns 'dismiss'.
+        // The Linking listener will still fire — do nothing and let it handle.
+        log('non-success, waiting for deep link');
       }
     } catch (e: any) {
+      log(`onSignIn error: ${e?.message}`);
       Alert.alert('Error', e?.message || 'Auth error');
     } finally { setLoading(false); }
   };
@@ -96,6 +117,7 @@ export default function Login() {
           )}
         </Pressable>
         <Text style={styles.terms}>By continuing you agree to our Terms & Privacy Policy</Text>
+        {debug ? <Text testID="auth-debug" style={styles.debug}>{debug}</Text> : null}
       </View>
     </SafeAreaView>
   );
@@ -113,4 +135,5 @@ const styles = StyleSheet.create({
   btn: { backgroundColor: theme.color.onSurface, borderRadius: theme.radius.pill, height: 56, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 12 },
   btnText: { color: '#fff', fontSize: 16, fontFamily: theme.font.body, fontWeight: '600' },
   terms: { textAlign: 'center', color: theme.color.onSurfaceTertiary, marginTop: theme.space.md, fontSize: 12, fontFamily: theme.font.body },
+  debug: { marginTop: theme.space.md, fontFamily: 'Courier', fontSize: 10, color: theme.color.onSurfaceTertiary, textAlign: 'left' },
 });

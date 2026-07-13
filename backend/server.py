@@ -306,6 +306,107 @@ async def mark_read(chat_id: str, authorization: Optional[str] = Header(None)):
     return {"ok": True}
 
 
+@api_router.post("/chats/mark-all-read")
+async def mark_all_read(authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    chats = await db.chats.find({"members": user["user_id"]}, {"_id": 0, "chat_id": 1, "members": 1}).to_list(500)
+    for c in chats:
+        await db.messages.update_many(
+            {"chat_id": c["chat_id"], "read_by": {"$ne": user["user_id"]}},
+            {"$addToSet": {"read_by": user["user_id"]}},
+        )
+        await manager.broadcast_to_chat(c["members"], {
+            "type": "read", "chat_id": c["chat_id"], "user_id": user["user_id"],
+        })
+    return {"ok": True, "count": len(chats)}
+
+
+# ============= Meetings & Reminders =============
+class MeetingCreate(BaseModel):
+    title: str
+    starts_at: str  # ISO datetime
+    description: Optional[str] = None
+    chat_id: Optional[str] = None  # optional - post to a chat
+
+
+class ReminderCreate(BaseModel):
+    title: str
+    remind_at: str
+    description: Optional[str] = None
+
+
+@api_router.post("/meetings")
+async def create_meeting(body: MeetingCreate, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    meeting = {
+        "meeting_id": f"mtg_{uuid.uuid4().hex[:12]}",
+        "title": body.title,
+        "starts_at": body.starts_at,
+        "description": body.description,
+        "chat_id": body.chat_id,
+        "owner_id": user["user_id"],
+        "created_at": now_utc(),
+    }
+    await db.meetings.insert_one(meeting.copy())
+    meeting.pop("_id", None)
+
+    if body.chat_id:
+        chat = await db.chats.find_one({"chat_id": body.chat_id, "members": user["user_id"]}, {"_id": 0})
+        if chat:
+            preview = f"📅 Meeting: {body.title}\n🕒 {body.starts_at}"
+            if body.description:
+                preview += f"\n📝 {body.description}"
+            msg = {
+                "message_id": f"msg_{uuid.uuid4().hex[:12]}",
+                "chat_id": body.chat_id,
+                "sender_id": user["user_id"],
+                "text": preview,
+                "image": None,
+                "created_at": now_utc(),
+                "read_by": [user["user_id"]],
+            }
+            await db.messages.insert_one(msg.copy())
+            msg.pop("_id", None)
+            await db.chats.update_one(
+                {"chat_id": body.chat_id},
+                {"$set": {"last_message": f"📅 Meeting: {body.title}", "last_message_at": now_utc(), "last_sender_id": user["user_id"]}},
+            )
+            await manager.broadcast_to_chat(chat["members"], {
+                "type": "message", "chat_id": body.chat_id, "message": _serialize_msg(msg),
+            })
+    return meeting
+
+
+@api_router.get("/meetings")
+async def list_meetings(authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    items = await db.meetings.find({"owner_id": user["user_id"]}, {"_id": 0}).sort("starts_at", 1).to_list(200)
+    return items
+
+
+@api_router.post("/reminders")
+async def create_reminder(body: ReminderCreate, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    reminder = {
+        "reminder_id": f"rem_{uuid.uuid4().hex[:12]}",
+        "title": body.title,
+        "remind_at": body.remind_at,
+        "description": body.description,
+        "owner_id": user["user_id"],
+        "created_at": now_utc(),
+    }
+    await db.reminders.insert_one(reminder.copy())
+    reminder.pop("_id", None)
+    return reminder
+
+
+@api_router.get("/reminders")
+async def list_reminders(authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    items = await db.reminders.find({"owner_id": user["user_id"]}, {"_id": 0}).sort("remind_at", 1).to_list(200)
+    return items
+
+
 def _serialize_msg(m: dict) -> dict:
     return {
         "message_id": m["message_id"],

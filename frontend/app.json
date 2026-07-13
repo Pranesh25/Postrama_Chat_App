@@ -10,7 +10,11 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.emergent.chatkotlinreact.jiro4e"
+      "bundleIdentifier": "com.emergent.chatkotlinreact.jiro4e",
+      "infoPlist": {
+        "NSContactsUsageDescription": "Find friends to chat with from your contacts",
+        "NSPhotoLibraryUsageDescription": "Share photos in your chats"
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -18,7 +22,8 @@
         "backgroundColor": "#000000"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.emergent.chatkotlinreact.jiro4e"
+      "package": "com.emergent.chatkotlinreact.jiro4e",
+      "permissions": ["READ_CONTACTS"]
     },
     "web": {
       "bundler": "metro",
@@ -35,7 +40,8 @@
           "resizeMode": "contain",
           "backgroundColor": "#000000"
         }
-      ]
+      ],
+      "@react-native-community/datetimepicker"
     ],
     "experiments": {
       "typedRoutes": true
