@@ -1,0 +1,177 @@
+{
+  "app_name": "Bubble",
+  "personality": "4 Tactile / Playful LIGHT",
+  "personality_one_liner": "A friendly, responsive, and bubbly messaging space driven by warm cream surfaces and vibrant coral accents.",
+  "color": {
+    "surface": "#FCFAF8",
+    "onSurface": "#1A1A1A",
+    "surfaceSecondary": "#FFFFFF",
+    "onSurfaceSecondary": "#2D2D2D",
+    "surfaceTertiary": "#F2EFEA",
+    "onSurfaceTertiary": "#595959",
+    "surfaceInverse": "#1A1A1A",
+    "onSurfaceInverse": "#FFFFFF",
+    "brand": "#FF6B4A",
+    "brandPrimary": "#FF6B4A",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#FFB4A3",
+    "onBrandSecondary": "#1A1A1A",
+    "brandTertiary": "#FFEBED",
+    "onBrandTertiary": "#D64123",
+    "success": "#4CAF50",
+    "onSuccess": "#FFFFFF",
+    "warning": "#FFC107",
+    "onWarning": "#1A1A1A",
+    "error": "#E53935",
+    "onError": "#FFFFFF",
+    "info": "#8D6E63",
+    "onInfo": "#FFFFFF",
+    "border": "#EAE6E1",
+    "borderStrong": "#D4CEC7",
+    "divider": "#F0ECE7"
+  },
+  "typography": {
+    "displayFontFamily": "Fredoka",
+    "textFontFamily": "Nunito",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Generous spacing. Bubble containers need ample internal padding. Do not cramp elements; let the layout breathe.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 8,
+    "md": 16,
+    "lg": 24,
+    "pill": 999
+  },
+  "shadow_tier": "2",
+  "navigation": "bottom_tabs",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": true,
+    "do's": [
+      "Apply to the bottom tab bar and sticky chat header when messages scroll beneath it",
+      "Use as a backdrop for the floating 'New Chat' action button"
+    ],
+    "dont's": [
+      "Never apply glass to individual chat bubbles or list items",
+      "Do not blur inputs or form fields"
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Login",
+      "purpose": "Google Sign-In entry point",
+      "states": {
+        "loading": "Centered brand-colored spinner",
+        "empty": "N/A",
+        "error": "Standard error toast/modal with retry button"
+      },
+      "layout": "Minimalist centered layout with a large, bubbly brand logo, a welcoming heading (Fredoka), and a pill-shaped Google login button anchored in the thumb zone. Background uses the warm surface color with a subtle, brandTertiary gradient near the top."
+    },
+    {
+      "name": "ChatList",
+      "purpose": "Main landing screen showing all active conversations (1-on-1 and groups)",
+      "states": {
+        "loading": "Skeleton list of rounded rows",
+        "empty": "Illustration with a text 'No chats yet. Start a conversation!' and a prominent 'New Chat' CTA.",
+        "error": "Error banner at top; list showing cached items if offline."
+      },
+      "layout": "Vertical scroll layout (FlatList). Each row has a circular avatar, Name, Preview text, and a right-aligned timestamp + brandPrimary unread dot if applicable. Floating Action Button (FAB) at bottom-right for 'New Chat'. Navigation header is glass over scrolling list."
+    },
+    {
+      "name": "ChatRoom",
+      "purpose": "The actual conversation interface for messaging",
+      "states": {
+        "loading": "Spinner over empty chat canvas",
+        "empty": "Subtle background watermark/illustration indicating start of chat.",
+        "error": "Red error icon next to failed messages with tap-to-retry."
+      },
+      "layout": "Sticky glass header with back button, user/group avatar, name, and online status. ScrollView/FlatList (inverted) for messages. Right-aligned bubbles in brandPrimary for 'Me', Left-aligned bubbles in surfaceSecondary for 'Other'. Message compose bar at bottom (surfaceTertiary) with rounded text input, attachment icon, and a prominent send button."
+    },
+    {
+      "name": "NewChat",
+      "purpose": "Search and select a contact to start a new chat or group",
+      "states": {
+        "loading": "Spinner in search bar",
+        "empty": "Message 'No contacts found' below search.",
+        "error": "Error toast."
+      },
+      "layout": "Modal or Stack screen with a sticky search bar at the top. Below is a vertical list of contacts. Multi-select checkboxes appear if 'New Group' is toggled."
+    },
+    {
+      "name": "Profile",
+      "purpose": "Manage user settings, avatar, and logout",
+      "states": {
+        "loading": "Spinner on save action",
+        "empty": "N/A",
+        "error": "Error alert on failed update."
+      },
+      "layout": "Large centered avatar at the top. Form fields (Name, Status) in surfaceTertiary pill shapes. A 'Sign Out' button at the bottom of the scroll view."
+    }
+  ],
+  "haptics": {
+    "events": {
+      "send_message": "impactLight",
+      "receive_message_active": "impactMedium",
+      "tab_press": "selection",
+      "button_press": "impactLight"
+    }
+  },
+  "images": {
+    "google_logo": {
+      "url": "https://images.unsplash.com/photo-1678483790053-71367bc7a02c?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMjd8MHwxfHNlYXJjaHwyfHxnb29nbGUlMjBsb2dvJTIwcG5nJTIwdHJhbnNwYXJlbnR8ZW58MHx8fHwxNzgzOTI0NzA1fDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Google Logo"
+    },
+    "avatar_1": {
+      "url": "https://images.unsplash.com/photo-1625241152315-4a698f74ceb7?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzd8MHwxfHNlYXJjaHwzfHxwb3J0cmFpdCUyMG9mJTIwY2hlZXJmdWwlMjB5b3VuZyUyMHBlcnNvbiUyMGZhY2UlMjBzbWlsaW5nfGVufDB8fHx8MTc4MzkyNDcwOXww&ixlib=rb-4.1.0&q=85",
+      "alt": "User Avatar - Smiling young man"
+    },
+    "avatar_2": {
+      "url": "https://images.unsplash.com/photo-1597117752855-72fe20be3b39?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzd8MHwxfHNlYXJjaHw0fHxwb3J0cmFpdCUyMG9mJTIwY2hlZXJmdWwlMjB5b3VuZyUyMHBlcnNvbiUyMGZhY2UlMjBzbWlsaW5nfGVufDB8fHx8MTc4MzkyNDcwOXww&ixlib=rb-4.1.0&q=85",
+      "alt": "User Avatar - Smiling girl"
+    },
+    "avatar_3": {
+      "url": "https://images.unsplash.com/photo-1611695434369-a8f5d76ceb7b?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzd8MHwxfHNlYXJjaHwxfHxwb3J0cmFpdCUyMG9mJTIwY2hlZXJmdWwlMjB5b3VuZyUyMHBlcnNvbiUyMGZhY2UlMjBzbWlsaW5nfGVufDB8fHx8MTc4MzkyNDcwOXww&ixlib=rb-4.1.0&q=85",
+      "alt": "User Avatar - Smiling woman"
+    },
+    "sample_attachment": {
+      "url": "https://images.unsplash.com/photo-1760163178873-7644a924519e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxNzV8MHwxfHNlYXJjaHwxfHxsYXR0ZSUyMGFydCUyMGNvZmZlZSUyMGN1cCUyMG9uJTIwd29vZGVuJTIwdGFibGV8ZW58MHx8fHwxNzgzOTI0NzE0fDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Latte art attachment"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Use Phosphor icons with 'fill' for active tabs and 'regular' for inactive tabs.",
+    "Chat bubbles must follow strict alignment: Right for 'Me' (Coral brandPrimary), Left for 'Other' (White surfaceSecondary).",
+    "Never rely on color alone for sender differentiation. Ensure visual alignment is obvious.",
+    "Add a gradient scrim over the image attachment previews if text/metadata needs to be overlaid.",
+    "When a user presses 'Send', trigger the 'impactLight' haptic feedback.",
+    "Ensure the Message Composer is inside a KeyboardAvoidingView with padding so it floats cleanly above the keyboard.",
+    "Implement WebSockets for real-time delivery and offline message queuing. The UI should reflect offline state (e.g. gray clock icon for queued, tick for sent, double tick for read)."
+  ]
+}
