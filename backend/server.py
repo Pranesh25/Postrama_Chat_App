@@ -158,15 +158,6 @@ def _clean_user(u: dict) -> dict:
     }
 
 
-@api_router.get("/auth/me")
-async def auth_me(user=None):
-    return await auth_me_impl(user)
-
-
-async def auth_me_impl(user):
-    pass
-
-
 @api_router.get("/me")
 async def me_get(authorization: Optional[str] = Header(None)):
     user = await get_current_user(authorization)
