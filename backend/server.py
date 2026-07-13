@@ -78,7 +78,15 @@ class SendMessageBody(BaseModel):
     chat_id: str
     text: Optional[str] = None
     image: Optional[str] = None
-    client_id: Optional[str] = None  # for offline dedup
+    voice: Optional[str] = None  # base64 audio data URL
+    voice_duration: Optional[int] = None  # seconds
+    file: Optional[Dict] = None  # {name, mime, data_b64, size}
+    contact: Optional[Dict] = None  # {name, phone, email}
+    reply_to: Optional[str] = None  # message_id of the message being replied to
+    ciphertext: Optional[str] = None
+    nonce: Optional[str] = None
+    encrypted: bool = False
+    client_id: Optional[str] = None
 
 
 class EditMessageBody(BaseModel):
@@ -87,7 +95,19 @@ class EditMessageBody(BaseModel):
 
 class UpdateProfileBody(BaseModel):
     name: Optional[str] = None
-    picture: Optional[str] = None  # base64 data URL
+    picture: Optional[str] = None
+
+
+class ReactionBody(BaseModel):
+    emoji: str
+
+
+class PublicKeyBody(BaseModel):
+    public_key: str  # base64-encoded X25519 public key
+
+
+class ChatEncryptionBody(BaseModel):
+    encrypted: bool
 
 
 # ============= Auth =============
@@ -164,6 +184,7 @@ def _clean_user(u: dict) -> dict:
         "picture": u.get("picture"),
         "online": u.get("online", False),
         "last_seen": u.get("last_seen"),
+        "public_key": u.get("public_key"),
     }
 
 
@@ -212,6 +233,7 @@ async def list_chats(authorization: Optional[str] = Header(None)):
         })
         result.append({
             **c,
+            "encrypted": bool(c.get("encrypted", False)),
             "members": [_clean_user(m) for m in members],
             "unread": unread,
         })
@@ -262,7 +284,7 @@ async def send_message(body: SendMessageBody, authorization: Optional[str] = Hea
     chat = await db.chats.find_one({"chat_id": body.chat_id, "members": user["user_id"]}, {"_id": 0})
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
-    if not body.text and not body.image:
+    if not body.text and not body.image and not body.voice and not body.file and not body.contact and not body.ciphertext:
         raise HTTPException(status_code=400, detail="Empty message")
 
     msg = {
@@ -271,6 +293,15 @@ async def send_message(body: SendMessageBody, authorization: Optional[str] = Hea
         "sender_id": user["user_id"],
         "text": body.text,
         "image": body.image,
+        "voice": body.voice,
+        "voice_duration": body.voice_duration,
+        "file": body.file,
+        "contact": body.contact,
+        "reply_to": body.reply_to,
+        "ciphertext": body.ciphertext,
+        "nonce": body.nonce,
+        "encrypted": body.encrypted,
+        "reactions": {},
         "created_at": now_utc(),
         "read_by": [user["user_id"]],
         "client_id": body.client_id,
@@ -278,7 +309,18 @@ async def send_message(body: SendMessageBody, authorization: Optional[str] = Hea
     await db.messages.insert_one(msg.copy())
     msg.pop("_id", None)
 
-    preview = "📷 Photo" if body.image and not body.text else (body.text or "")
+    if body.encrypted:
+        preview = "🔒 Encrypted message"
+    elif body.voice:
+        preview = "🎤 Voice message"
+    elif body.file:
+        preview = f"📎 {body.file.get('name', 'File')}"
+    elif body.contact:
+        preview = f"👤 {body.contact.get('name', 'Contact')}"
+    elif body.image and not body.text:
+        preview = "📷 Photo"
+    else:
+        preview = body.text or ""
     await db.chats.update_one(
         {"chat_id": body.chat_id},
         {"$set": {
@@ -406,11 +448,10 @@ async def update_me(body: UpdateProfileBody, authorization: Optional[str] = Head
         if n:
             patch["name"] = n[:80]
     if body.picture is not None:
-        patch["picture"] = body.picture  # base64 or null
+        patch["picture"] = body.picture
     if patch:
         await db.users.update_one({"user_id": user["user_id"]}, {"$set": patch})
     updated = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
-    # Broadcast profile change to everyone who shares a chat
     chats = await db.chats.find({"members": user["user_id"]}, {"_id": 0, "members": 1}).to_list(500)
     contacts: set = set()
     for c in chats:
@@ -420,6 +461,74 @@ async def update_me(body: UpdateProfileBody, authorization: Optional[str] = Head
     for uid in contacts:
         await manager.send(uid, {"type": "profile_updated", "user": _clean_user(updated)})
     return _clean_user(updated)
+
+
+# ============= Reactions =============
+@api_router.post("/messages/{message_id}/reactions")
+async def toggle_reaction(message_id: str, body: ReactionBody, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    msg = await db.messages.find_one({"message_id": message_id}, {"_id": 0})
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+    chat = await db.chats.find_one({"chat_id": msg["chat_id"], "members": user["user_id"]}, {"_id": 0})
+    if not chat:
+        raise HTTPException(status_code=403, detail="Not a member of this chat")
+    emoji = (body.emoji or "").strip()
+    if not emoji or len(emoji) > 8:
+        raise HTTPException(status_code=400, detail="Invalid emoji")
+    reactions = dict(msg.get("reactions") or {})
+    users_for_emoji = list(reactions.get(emoji, []))
+    if user["user_id"] in users_for_emoji:
+        users_for_emoji.remove(user["user_id"])
+    else:
+        users_for_emoji.append(user["user_id"])
+    if users_for_emoji:
+        reactions[emoji] = users_for_emoji
+    else:
+        reactions.pop(emoji, None)
+    await db.messages.update_one({"message_id": message_id}, {"$set": {"reactions": reactions}})
+    await manager.broadcast_to_chat(chat["members"], {
+        "type": "message_reaction",
+        "chat_id": msg["chat_id"],
+        "message_id": message_id,
+        "reactions": reactions,
+    })
+    return {"reactions": reactions}
+
+
+# ============= E2EE key exchange =============
+@api_router.post("/keys")
+async def upload_public_key(body: PublicKeyBody, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"public_key": body.public_key}})
+    return {"ok": True}
+
+
+@api_router.get("/users/{user_id}/key")
+async def get_public_key(user_id: str, authorization: Optional[str] = Header(None)):
+    await get_current_user(authorization)
+    u = await db.users.find_one({"user_id": user_id}, {"_id": 0, "public_key": 1, "user_id": 1})
+    if not u:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"user_id": user_id, "public_key": u.get("public_key")}
+
+
+@api_router.patch("/chats/{chat_id}/encryption")
+async def toggle_chat_encryption(chat_id: str, body: ChatEncryptionBody, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    chat = await db.chats.find_one({"chat_id": chat_id, "members": user["user_id"]}, {"_id": 0})
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    if chat.get("is_group"):
+        raise HTTPException(status_code=400, detail="E2EE for groups is not supported yet")
+    await db.chats.update_one({"chat_id": chat_id}, {"$set": {"encrypted": body.encrypted}})
+    await manager.broadcast_to_chat(chat["members"], {
+        "type": "chat_encryption",
+        "chat_id": chat_id,
+        "encrypted": body.encrypted,
+        "by": user["user_id"],
+    })
+    return {"ok": True, "encrypted": body.encrypted}
 
 
 @api_router.post("/chats/mark-all-read")
@@ -530,6 +639,15 @@ def _serialize_msg(m: dict) -> dict:
         "sender_id": m["sender_id"],
         "text": m.get("text"),
         "image": m.get("image"),
+        "voice": m.get("voice"),
+        "voice_duration": m.get("voice_duration"),
+        "file": m.get("file"),
+        "contact": m.get("contact"),
+        "reply_to": m.get("reply_to"),
+        "ciphertext": m.get("ciphertext"),
+        "nonce": m.get("nonce"),
+        "encrypted": bool(m.get("encrypted")),
+        "reactions": m.get("reactions", {}),
         "created_at": m["created_at"].isoformat() if isinstance(m["created_at"], datetime) else m["created_at"],
         "edited_at": m["edited_at"].isoformat() if isinstance(m.get("edited_at"), datetime) else m.get("edited_at"),
         "read_by": m.get("read_by", []),

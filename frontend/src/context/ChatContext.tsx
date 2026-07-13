@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useRef, useState, useCallb
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from './AuthContext';
 import { api, API } from '../api/client';
+import { ensureKeypair, encryptFor, decryptFrom } from '../lib/crypto';
 
 export type Message = {
   message_id: string;
@@ -9,12 +10,22 @@ export type Message = {
   sender_id: string;
   text?: string | null;
   image?: string | null;
+  voice?: string | null;
+  voice_duration?: number | null;
+  file?: { name: string; mime: string; data: string; size: number } | null;
+  contact?: { name: string; phone?: string; email?: string } | null;
+  reply_to?: string | null;
+  ciphertext?: string | null;
+  nonce?: string | null;
+  encrypted?: boolean;
+  reactions?: Record<string, string[]>;
   created_at: string;
   edited_at?: string | null;
   read_by: string[];
   client_id?: string | null;
   pending?: boolean;
   failed?: boolean;
+  decrypted_text?: string | null;
 };
 
 export type ChatMember = {
@@ -23,6 +34,7 @@ export type ChatMember = {
   name: string;
   picture?: string | null;
   online?: boolean;
+  public_key?: string | null;
 };
 
 export type Chat = {
@@ -31,6 +43,7 @@ export type Chat = {
   name?: string | null;
   members: ChatMember[];
   created_by: string;
+  encrypted?: boolean;
   last_message?: string | null;
   last_message_at?: string | null;
   last_sender_id?: string | null;
@@ -50,10 +63,11 @@ type ChatState = {
   dismissBanner: () => void;
   refreshChats: () => Promise<void>;
   loadMessages: (chat_id: string) => Promise<void>;
-  sendMessage: (chat_id: string, text?: string, image?: string) => Promise<void>;
+  sendMessage: (chat_id: string, payload: Partial<Message>) => Promise<void>;
   editMessage: (message_id: string, text: string) => Promise<void>;
   deleteMessage: (message_id: string) => Promise<void>;
   deleteChat: (chat_id: string) => Promise<void>;
+  toggleReaction: (message_id: string, emoji: string) => Promise<void>;
   markRead: (chat_id: string) => Promise<void>;
   sendTyping: (chat_id: string, is_typing: boolean) => void;
   createChat: (member_ids: string[], is_group: boolean, name?: string) => Promise<Chat>;
@@ -77,6 +91,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const chatsRef = useRef<Chat[]>([]);
+  chatsRef.current = chats;
 
   const dismissBanner = useCallback(() => {
     if (bannerTimer.current) clearTimeout(bannerTimer.current);
@@ -107,13 +123,47 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     } catch (e) { /* offline */ }
   }, [token]);
 
+  // Ensure our E2EE keypair exists & is uploaded once we have a token.
+  useEffect(() => {
+    if (!token) return;
+    (async () => {
+      try {
+        const kp = await ensureKeypair();
+        await api('/api/keys', token, { method: 'POST', body: JSON.stringify({ public_key: kp.publicKey }) });
+      } catch {}
+    })();
+  }, [token]);
+
+  const keypairRef = useRef<{ publicKey: string; secretKey: string } | null>(null);
+  useEffect(() => {
+    (async () => { keypairRef.current = await ensureKeypair(); })();
+  }, []);
+
+  const decryptMessageIfNeeded = useCallback((msg: Message): Message => {
+    if (!msg.encrypted || !msg.ciphertext || !msg.nonce) return msg;
+    const kp = keypairRef.current;
+    if (!kp) return msg;
+    // Find sender's public key from chats
+    let senderKey: string | null = null;
+    for (const c of chatsRef.current) {
+      const m = c.members.find((x) => x.user_id === msg.sender_id);
+      if (m?.public_key) { senderKey = m.public_key; break; }
+    }
+    // If I'm the sender, use my own key as "their" key so I can decrypt what I sent (nacl.box is symmetric between the pair)
+    if (msg.sender_id === user?.user_id && !senderKey) senderKey = kp.publicKey;
+    if (!senderKey) return { ...msg, decrypted_text: null };
+    const plain = decryptFrom(senderKey, kp.secretKey, msg.ciphertext, msg.nonce);
+    return { ...msg, decrypted_text: plain };
+  }, [user?.user_id]);
+
   const loadMessages = useCallback(async (chat_id: string) => {
     if (!token) return;
     try {
-      const list = await api(`/api/chats/${chat_id}/messages`, token);
-      setMessages((m) => ({ ...m, [chat_id]: list }));
+      const list: Message[] = await api(`/api/chats/${chat_id}/messages`, token);
+      const decoded = list.map(decryptMessageIfNeeded);
+      setMessages((m) => ({ ...m, [chat_id]: decoded }));
     } catch {}
-  }, [token]);
+  }, [token, decryptMessageIfNeeded]);
 
   const flushOutbox = useCallback(async () => {
     if (!token) return;
@@ -132,36 +182,60 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     await writeOutbox(remaining);
   }, [token]);
 
-  const sendMessage = useCallback(async (chat_id: string, text?: string, image?: string) => {
+  const sendMessage = useCallback(async (chat_id: string, payload: Partial<Message>) => {
     if (!user) return;
     const client_id = `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const chat = chatsRef.current.find((c) => c.chat_id === chat_id);
+    let toSend: any = { ...payload, chat_id, client_id };
+
+    // E2EE: if chat is encrypted and we have a text payload, encrypt it.
+    if (chat?.encrypted && payload.text && !payload.image && !payload.voice && !payload.file && !payload.contact) {
+      const kp = keypairRef.current;
+      const other = chat.members.find((m) => m.user_id !== user.user_id);
+      if (kp && other?.public_key) {
+        const enc = encryptFor(other.public_key, kp.secretKey, payload.text);
+        toSend = { chat_id, client_id, ciphertext: enc.ciphertext, nonce: enc.nonce, encrypted: true };
+      }
+    }
+
     const optimistic: Message = {
       message_id: client_id,
       chat_id, sender_id: user.user_id,
-      text: text || null, image: image || null,
+      text: payload.text || null,
+      image: payload.image || null,
+      voice: payload.voice || null,
+      voice_duration: payload.voice_duration || null,
+      file: payload.file || null,
+      contact: payload.contact || null,
+      reply_to: payload.reply_to || null,
+      encrypted: !!toSend.encrypted,
+      ciphertext: toSend.ciphertext || null,
+      nonce: toSend.nonce || null,
+      reactions: {},
       created_at: new Date().toISOString(),
       read_by: [user.user_id],
       client_id, pending: true,
+      decrypted_text: payload.text || null,
     };
     setMessages((m) => ({ ...m, [chat_id]: [...(m[chat_id] || []), optimistic] }));
 
     if (!token) return;
     try {
-      const sent = await api('/api/messages', token, {
+      const sent: Message = await api('/api/messages', token, {
         method: 'POST',
-        body: JSON.stringify({ chat_id, text, image, client_id }),
+        body: JSON.stringify(toSend),
       });
+      const decoded = decryptMessageIfNeeded({ ...sent, decrypted_text: optimistic.decrypted_text });
       setMessages((m) => {
-        const list = (m[chat_id] || []).map((x) => x.client_id === client_id ? { ...sent, pending: false } : x);
+        const list = (m[chat_id] || []).map((x) => x.client_id === client_id ? { ...decoded, pending: false } : x);
         return { ...m, [chat_id]: list };
       });
     } catch {
-      // queue in outbox
       const items = await readOutbox();
-      items.push({ client_id, chat_id, text, image, created_at: optimistic.created_at });
+      items.push({ client_id, chat_id, ...toSend, created_at: optimistic.created_at });
       await writeOutbox(items);
     }
-  }, [token, user]);
+  }, [token, user, decryptMessageIfNeeded]);
 
   const markRead = useCallback(async (chat_id: string) => {
     if (!token) return;
@@ -203,6 +277,26 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     try { await api(`/api/chats/${chat_id}`, token, { method: 'DELETE' }); } catch {}
   }, [token]);
 
+  const toggleReaction = useCallback(async (message_id: string, emoji: string) => {
+    if (!token || !user) return;
+    // optimistic
+    setMessages((m) => {
+      const out = { ...m };
+      for (const cid of Object.keys(out)) {
+        out[cid] = out[cid].map((msg) => {
+          if (msg.message_id !== message_id) return msg;
+          const r = { ...(msg.reactions || {}) };
+          const arr = new Set(r[emoji] || []);
+          if (arr.has(user.user_id)) arr.delete(user.user_id); else arr.add(user.user_id);
+          if (arr.size > 0) r[emoji] = Array.from(arr); else delete r[emoji];
+          return { ...msg, reactions: r };
+        });
+      }
+      return out;
+    });
+    try { await api(`/api/messages/${message_id}/reactions`, token, { method: 'POST', body: JSON.stringify({ emoji }) }); } catch {}
+  }, [token, user]);
+
   const createChat = useCallback(async (member_ids: string[], is_group: boolean, name?: string): Promise<Chat> => {
     const c = await api('/api/chats', token, {
       method: 'POST',
@@ -238,7 +332,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         try {
           const data = JSON.parse(ev.data);
           if (data.type === 'message') {
-            const msg: Message = data.message;
+            const raw: Message = data.message;
+            const msg = decryptMessageIfNeeded(raw);
             setMessages((m) => {
               const existing = m[msg.chat_id] || [];
               if (existing.some((x) => x.message_id === msg.message_id)) return m;
@@ -247,16 +342,28 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               return { ...m, [msg.chat_id]: found ? replaced : [...replaced, msg] };
             });
             refreshChats();
-            // Banner if in different chat & not our own message
             if (user && msg.sender_id !== user.user_id && activeChatIdRef.current !== msg.chat_id) {
               const chatInfo = chatsRef.current.find((c) => c.chat_id === msg.chat_id);
               const senderInfo = chatInfo?.members.find((mm) => mm.user_id === msg.sender_id);
               const title = chatInfo?.is_group
                 ? `${senderInfo?.name || 'Someone'} in ${chatInfo?.name || 'Group'}`
                 : (senderInfo?.name || 'New message');
-              const body = msg.text || (msg.image ? '📷 Photo' : '');
+              const body = msg.encrypted
+                ? '🔒 Encrypted message'
+                : msg.voice ? '🎤 Voice message'
+                : msg.file ? `📎 ${msg.file.name}`
+                : msg.contact ? `👤 ${msg.contact.name}`
+                : msg.text || (msg.image ? '📷 Photo' : '');
               showBanner({ chat_id: msg.chat_id, title, body: body.slice(0, 100) });
             }
+          } else if (data.type === 'message_reaction') {
+            const { chat_id, message_id, reactions } = data;
+            setMessages((m) => ({
+              ...m,
+              [chat_id]: (m[chat_id] || []).map((x) => x.message_id === message_id ? { ...x, reactions } : x),
+            }));
+          } else if (data.type === 'chat_encryption') {
+            setChats((cs) => cs.map((c) => c.chat_id === data.chat_id ? { ...c, encrypted: !!data.encrypted } : c));
           } else if (data.type === 'message_updated') {
             const msg: Message = data.message;
             setMessages((m) => {
@@ -325,9 +432,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     };
   }, [token, flushOutbox, refreshChats]);
 
-  const chatsRef = useRef<Chat[]>([]);
-  chatsRef.current = chats;
-
   useEffect(() => { if (token) refreshChats(); }, [token, refreshChats]);
 
   return (
@@ -335,7 +439,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       chats, messages, typing, connected,
       activeChatId, setActiveChatId,
       banner, dismissBanner,
-      refreshChats, loadMessages, sendMessage, editMessage, deleteMessage, deleteChat, markRead, sendTyping, createChat,
+      refreshChats, loadMessages, sendMessage, editMessage, deleteMessage, deleteChat, toggleReaction, markRead, sendTyping, createChat,
     }}>
       {children}
     </Ctx.Provider>

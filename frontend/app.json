@@ -23,7 +23,9 @@
       },
       "edgeToEdgeEnabled": true,
       "package": "com.emergent.chatkotlinreact.jiro4e",
-      "permissions": ["READ_CONTACTS"]
+      "permissions": [
+        "READ_CONTACTS"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -41,7 +43,8 @@
           "backgroundColor": "#000000"
         }
       ],
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      "expo-audio"
     ],
     "experiments": {
       "typedRoutes": true
