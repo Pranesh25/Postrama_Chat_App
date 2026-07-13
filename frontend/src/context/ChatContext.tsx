@@ -10,6 +10,7 @@ export type Message = {
   text?: string | null;
   image?: string | null;
   created_at: string;
+  edited_at?: string | null;
   read_by: string[];
   client_id?: string | null;
   pending?: boolean;
@@ -41,11 +42,18 @@ type OutboxItem = { client_id: string; chat_id: string; text?: string; image?: s
 type ChatState = {
   chats: Chat[];
   messages: Record<string, Message[]>;
-  typing: Record<string, Set<string>>; // chat_id -> set of user_ids
+  typing: Record<string, Set<string>>;
   connected: boolean;
+  activeChatId: string | null;
+  setActiveChatId: (id: string | null) => void;
+  banner: { chat_id: string; title: string; body: string } | null;
+  dismissBanner: () => void;
   refreshChats: () => Promise<void>;
   loadMessages: (chat_id: string) => Promise<void>;
   sendMessage: (chat_id: string, text?: string, image?: string) => Promise<void>;
+  editMessage: (message_id: string, text: string) => Promise<void>;
+  deleteMessage: (message_id: string) => Promise<void>;
+  deleteChat: (chat_id: string) => Promise<void>;
   markRead: (chat_id: string) => Promise<void>;
   sendTyping: (chat_id: string, is_typing: boolean) => void;
   createChat: (member_ids: string[], is_group: boolean, name?: string) => Promise<Chat>;
@@ -56,14 +64,29 @@ const Ctx = createContext<ChatState>({} as ChatState);
 const OUTBOX_KEY = 'bubble_outbox';
 
 export function ChatProvider({ children }: { children: React.ReactNode }) {
-  const { user, token } = useAuth();
+  const { user, token, setUser } = useAuth();
   const [chats, setChats] = useState<Chat[]>([]);
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
   const [typing, setTyping] = useState<Record<string, Set<string>>>({});
   const [connected, setConnected] = useState(false);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const activeChatIdRef = useRef<string | null>(null);
+  activeChatIdRef.current = activeChatId;
+  const [banner, setBanner] = useState<{ chat_id: string; title: string; body: string } | null>(null);
+  const bannerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  const dismissBanner = useCallback(() => {
+    if (bannerTimer.current) clearTimeout(bannerTimer.current);
+    setBanner(null);
+  }, []);
+  const showBanner = useCallback((b: { chat_id: string; title: string; body: string }) => {
+    setBanner(b);
+    if (bannerTimer.current) clearTimeout(bannerTimer.current);
+    bannerTimer.current = setTimeout(() => setBanner(null), 4000);
+  }, []);
 
   // ---------- outbox helpers ----------
   const readOutbox = async (): Promise<OutboxItem[]> => {
@@ -146,6 +169,40 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setChats((cs) => cs.map((c) => c.chat_id === chat_id ? { ...c, unread: 0 } : c));
   }, [token]);
 
+  const editMessage = useCallback(async (message_id: string, text: string) => {
+    if (!token) return;
+    const t = text.trim();
+    if (!t) return;
+    // optimistic
+    setMessages((m) => {
+      const out = { ...m };
+      for (const cid of Object.keys(out)) {
+        out[cid] = out[cid].map((msg) => msg.message_id === message_id ? { ...msg, text: t, edited_at: new Date().toISOString() } : msg);
+      }
+      return out;
+    });
+    try {
+      await api(`/api/messages/${message_id}`, token, { method: 'PATCH', body: JSON.stringify({ text: t }) });
+    } catch {}
+  }, [token]);
+
+  const deleteMessage = useCallback(async (message_id: string) => {
+    if (!token) return;
+    setMessages((m) => {
+      const out = { ...m };
+      for (const cid of Object.keys(out)) out[cid] = out[cid].filter((msg) => msg.message_id !== message_id);
+      return out;
+    });
+    try { await api(`/api/messages/${message_id}`, token, { method: 'DELETE' }); } catch {}
+  }, [token]);
+
+  const deleteChat = useCallback(async (chat_id: string) => {
+    if (!token) return;
+    setChats((cs) => cs.filter((c) => c.chat_id !== chat_id));
+    setMessages((m) => { const out = { ...m }; delete out[chat_id]; return out; });
+    try { await api(`/api/chats/${chat_id}`, token, { method: 'DELETE' }); } catch {}
+  }, [token]);
+
   const createChat = useCallback(async (member_ids: string[], is_group: boolean, name?: string): Promise<Chat> => {
     const c = await api('/api/chats', token, {
       method: 'POST',
@@ -184,13 +241,42 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             const msg: Message = data.message;
             setMessages((m) => {
               const existing = m[msg.chat_id] || [];
-              // dedup by message_id or client_id
               if (existing.some((x) => x.message_id === msg.message_id)) return m;
               const replaced = existing.map((x) => x.client_id && x.client_id === msg.client_id ? { ...msg, pending: false } : x);
               const found = replaced.some((x) => x.message_id === msg.message_id);
               return { ...m, [msg.chat_id]: found ? replaced : [...replaced, msg] };
             });
             refreshChats();
+            // Banner if in different chat & not our own message
+            if (user && msg.sender_id !== user.user_id && activeChatIdRef.current !== msg.chat_id) {
+              const chatInfo = chatsRef.current.find((c) => c.chat_id === msg.chat_id);
+              const senderInfo = chatInfo?.members.find((mm) => mm.user_id === msg.sender_id);
+              const title = chatInfo?.is_group
+                ? `${senderInfo?.name || 'Someone'} in ${chatInfo?.name || 'Group'}`
+                : (senderInfo?.name || 'New message');
+              const body = msg.text || (msg.image ? '📷 Photo' : '');
+              showBanner({ chat_id: msg.chat_id, title, body: body.slice(0, 100) });
+            }
+          } else if (data.type === 'message_updated') {
+            const msg: Message = data.message;
+            setMessages((m) => {
+              const list = (m[msg.chat_id] || []).map((x) => x.message_id === msg.message_id ? { ...msg } : x);
+              return { ...m, [msg.chat_id]: list };
+            });
+            refreshChats();
+          } else if (data.type === 'message_deleted') {
+            const { chat_id, message_id } = data;
+            setMessages((m) => ({ ...m, [chat_id]: (m[chat_id] || []).filter((x) => x.message_id !== message_id) }));
+            refreshChats();
+          } else if (data.type === 'chat_deleted') {
+            setChats((cs) => cs.filter((c) => c.chat_id !== data.chat_id));
+            setMessages((m) => { const out = { ...m }; delete out[data.chat_id]; return out; });
+          } else if (data.type === 'profile_updated') {
+            const u = data.user;
+            setChats((cs) => cs.map((c) => ({
+              ...c,
+              members: c.members.map((m) => m.user_id === u.user_id ? { ...m, name: u.name, picture: u.picture, online: u.online } : m),
+            })));
           } else if (data.type === 'typing') {
             const { chat_id, user_id, is_typing } = data;
             setTyping((t) => {
@@ -239,10 +325,18 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     };
   }, [token, flushOutbox, refreshChats]);
 
+  const chatsRef = useRef<Chat[]>([]);
+  chatsRef.current = chats;
+
   useEffect(() => { if (token) refreshChats(); }, [token, refreshChats]);
 
   return (
-    <Ctx.Provider value={{ chats, messages, typing, connected, refreshChats, loadMessages, sendMessage, markRead, sendTyping, createChat }}>
+    <Ctx.Provider value={{
+      chats, messages, typing, connected,
+      activeChatId, setActiveChatId,
+      banner, dismissBanner,
+      refreshChats, loadMessages, sendMessage, editMessage, deleteMessage, deleteChat, markRead, sendTyping, createChat,
+    }}>
       {children}
     </Ctx.Provider>
   );

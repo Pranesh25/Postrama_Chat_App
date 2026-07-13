@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, Pressable, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, FlatList, Pressable, RefreshControl, Alert, Animated } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -28,7 +28,7 @@ function timeAgo(iso?: string | null) {
 
 export default function ChatsScreen() {
   const { user, token } = useAuth();
-  const { chats, refreshChats, markRead, connected } = useChat();
+  const { chats, refreshChats, markRead, connected, banner, dismissBanner, deleteChat } = useChat();
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -77,7 +77,19 @@ export default function ChatsScreen() {
       <Pressable
         testID={`chat-item-${item.chat_id}`}
         onPress={() => selectionMode ? toggleSelect(item.chat_id) : router.push(`/chat/${item.chat_id}`)}
-        onLongPress={() => { setSelectionMode(true); toggleSelect(item.chat_id); }}
+        onLongPress={() => {
+          if (selectionMode) return;
+          try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch {}
+          Alert.alert(
+            item.is_group ? 'Leave conversation?' : 'Delete conversation?',
+            item.is_group ? 'You will be removed from this group.' : 'This will delete this chat and all its messages.',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              { text: item.is_group ? 'Leave' : 'Delete', style: 'destructive', onPress: () => deleteChat(item.chat_id) },
+            ]
+          );
+        }}
+        delayLongPress={350}
         style={({ pressed }) => [styles.row, (pressed || isSelected) && { backgroundColor: isSelected ? theme.color.brandTertiary : theme.color.surfaceTertiary }]}
       >
         {selectionMode && (
@@ -165,6 +177,23 @@ export default function ChatsScreen() {
 
       <OverflowMenu visible={menuOpen} onClose={() => setMenuOpen(false)} items={menuItems} anchor="left" />
       <ProfileMenu visible={profileOpen} onClose={() => setProfileOpen(false)} />
+
+      {banner && (
+        <Pressable
+          testID="notification-banner"
+          onPress={() => { const id = banner.chat_id; dismissBanner(); router.push(`/chat/${id}`); }}
+          style={styles.banner}
+        >
+          <View style={styles.bannerIcon}><Ionicons name="chatbubble" size={16} color="#fff" /></View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.bannerTitle} numberOfLines={1}>{banner.title}</Text>
+            <Text style={styles.bannerBody} numberOfLines={1}>{banner.body}</Text>
+          </View>
+          <Pressable onPress={dismissBanner} hitSlop={12} testID="banner-close">
+            <Ionicons name="close" size={18} color={theme.color.onSurfaceTertiary} />
+          </Pressable>
+        </Pressable>
+      )}
     </SafeAreaView>
   );
 }
@@ -195,4 +224,15 @@ const styles = StyleSheet.create({
   emptyIcon: { width: 88, height: 88, borderRadius: 44, backgroundColor: theme.color.brandTertiary, alignItems: 'center', justifyContent: 'center', marginBottom: theme.space.lg },
   emptyTitle: { fontSize: 20, fontFamily: theme.font.display, fontWeight: '700', color: theme.color.onSurface },
   emptySub: { textAlign: 'center', color: theme.color.onSurfaceTertiary, marginTop: 8, fontFamily: theme.font.body },
+  banner: {
+    position: 'absolute', top: 64, left: 16, right: 16,
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: theme.color.surfaceSecondary, borderRadius: 16,
+    padding: 12,
+    shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 16, shadowOffset: { width: 0, height: 4 }, elevation: 10,
+    borderWidth: 1, borderColor: theme.color.border,
+  },
+  bannerIcon: { width: 32, height: 32, borderRadius: 16, backgroundColor: theme.color.brand, alignItems: 'center', justifyContent: 'center' },
+  bannerTitle: { fontFamily: theme.font.body, fontWeight: '700', color: theme.color.onSurface, fontSize: 13 },
+  bannerBody: { fontFamily: theme.font.body, color: theme.color.onSurfaceTertiary, fontSize: 12, marginTop: 2 },
 });

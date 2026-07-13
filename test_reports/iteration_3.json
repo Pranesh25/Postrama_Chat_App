@@ -1,0 +1,46 @@
+{
+  "summary": "Iteration 3 backend testing complete. Added 25 new pytest tests for PATCH /api/messages/{id}, DELETE /api/messages/{id}, DELETE /api/chats/{id}, PATCH /api/me and their WS broadcasts. 25/25 new tests PASS; full regression 62/62 PASS (100%). All new endpoints: auth-gated (401), sender/member ownership enforced (403/404), MongoDB _id excluded, edited_at exposed on serializer, chat preview recomputed correctly on message delete/edit, group-leave vs full-delete branching works, and all four expected WS events verified live: message_updated, message_deleted, chat_deleted, profile_updated.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PATCH /api/me", "issue": "picture accepts arbitrary string with no size/format validation. A malicious client could store a multi-MB base64 blob which then gets echoed in _clean_user() everywhere the user appears (chat lists, search, presence broadcasts). Consider capping length (e.g. 400 KB) or validating data URL prefix."},
+      {"endpoint": "DELETE /api/chats/{id} (group leave branch)", "issue": "When a group member leaves, no system/informational message is stored in the chat. Remaining members only get a 'chat_deleted' WS event (which semantically means 'the chat is gone'), which is misleading — from their POV the chat still exists, one member just left. A distinct WS type like 'chat_member_left' would be more accurate."},
+      {"endpoint": "PATCH /api/messages/{id}", "issue": "No lock on chat_id — if the chat has since been deleted (e.g. via DELETE /api/chats/{id}) but the message somehow survives, the code will crash on chat.get(...). Currently unreachable because delete_chat cascades messages, but worth a defensive check."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter3_crud_profile.py",
+    "/app/backend/tests/test_bubble_chat.py",
+    "/app/backend/tests/test_menu_features.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/iter3_results.xml",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Optional hardening: validate /api/me picture payload (size + data URL prefix) before persistence.",
+    "Optional UX: consider a separate WS event type for 'member left a group' vs full chat deletion so peers can render the correct in-chat notice.",
+    "Existing iter-1 backlog: dead GET /api/auth/me handler still present."
+  ],
+  "critical_code_review_comments": [
+    "edit_message correctly refreshes chat.last_message only when the edited msg is BOTH sent by the current user AND is the newest by created_at — logic verified. However, if the newest msg was authored by someone else and the edit is on an older own msg, no preview change happens (correct behaviour, but worth documenting).",
+    "delete_message re-computes last_message_at from the surviving newest message. This means the chat can move UP or DOWN in the list-sorted-by-last_message_at after a delete, which is desirable, but the /api/chats list is sorted server-side once — clients relying on WS updates need to re-sort locally when they see message_deleted.",
+    "delete_chat broadcasts 'chat_deleted' to ALL previous members regardless of the leave-vs-delete branch. That means when u1 leaves a 3-person group, u2 and u3 receive 'chat_deleted' even though the chat still exists for them. See minor issue above.",
+    "update_me only broadcasts to contacts (users sharing at least one chat). A newly-registered user with no chats yet gets no WS fan-out — correct.",
+    "PATCH /api/me: patch dict is built conditionally; passing {} makes it a no-op DB call — fine. Empty-string name is silently ignored (not an error). Documented behaviour."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter3_crud_profile.py (new, 25 tests)"
+  ],
+  "success_rate": {"backend": "100% (62/62 total; 25/25 new iter-3)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "Reuses conftest.py session-scoped seed fixture (TEST_alice/bob/carol users + sessions). Each test creates its own chats/messages tagged with 'TEST' text; conftest teardown removes chats+messages tied to test users at session end.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend URL: https://chat-kotlin-react.preview.emergentagent.com. All 62 backend tests green. Run full regression via `pytest /app/backend/tests/ -v`. New iter-3 endpoints exercised: PATCH /api/messages/{id} (403 non-sender, 400 empty, 404 missing, last-msg preview refresh), DELETE /api/messages/{id} (403 non-sender, preview recompute, null preview when chat empty), DELETE /api/chats/{id} (404 non-member, full-delete cascade for 1-on-1 and last-member group, leave-behaviour for group with others), PATCH /api/me (401, name trim+80-cap, empty ignored, picture set). WS broadcasts verified live: message_updated, message_deleted, chat_deleted (with 'by' field), profile_updated (only to contacts sharing a chat). Regression: message serializer now emits edited_at (None on fresh sends).",
+  "rca_of_issue": "N/A — no bugs found. All spec'd iter-3 behaviours verified end-to-end (REST + WS + DB state)."
+}

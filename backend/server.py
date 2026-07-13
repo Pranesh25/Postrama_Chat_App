@@ -81,6 +81,15 @@ class SendMessageBody(BaseModel):
     client_id: Optional[str] = None  # for offline dedup
 
 
+class EditMessageBody(BaseModel):
+    text: str
+
+
+class UpdateProfileBody(BaseModel):
+    name: Optional[str] = None
+    picture: Optional[str] = None  # base64 data URL
+
+
 # ============= Auth =============
 async def get_current_user(authorization: Optional[str] = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):
@@ -306,6 +315,113 @@ async def mark_read(chat_id: str, authorization: Optional[str] = Header(None)):
     return {"ok": True}
 
 
+@api_router.patch("/messages/{message_id}")
+async def edit_message(message_id: str, body: EditMessageBody, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    msg = await db.messages.find_one({"message_id": message_id}, {"_id": 0})
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if msg["sender_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="Can only edit your own messages")
+    new_text = (body.text or "").strip()
+    if not new_text:
+        raise HTTPException(status_code=400, detail="Empty text")
+    await db.messages.update_one(
+        {"message_id": message_id},
+        {"$set": {"text": new_text, "edited_at": now_utc()}},
+    )
+    updated = await db.messages.find_one({"message_id": message_id}, {"_id": 0})
+    chat = await db.chats.find_one({"chat_id": msg["chat_id"]}, {"_id": 0})
+    # bump preview if this was the last message
+    if chat and chat.get("last_sender_id") == user["user_id"]:
+        last = await db.messages.find({"chat_id": msg["chat_id"]}, {"_id": 0}).sort("created_at", -1).limit(1).to_list(1)
+        if last and last[0]["message_id"] == message_id:
+            preview = "📷 Photo" if updated.get("image") and not updated.get("text") else (updated.get("text") or "")
+            await db.chats.update_one({"chat_id": msg["chat_id"]}, {"$set": {"last_message": preview[:200]}})
+    if chat:
+        await manager.broadcast_to_chat(chat["members"], {
+            "type": "message_updated",
+            "chat_id": msg["chat_id"],
+            "message": _serialize_msg(updated),
+        })
+    return _serialize_msg(updated)
+
+
+@api_router.delete("/messages/{message_id}")
+async def delete_message(message_id: str, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    msg = await db.messages.find_one({"message_id": message_id}, {"_id": 0})
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if msg["sender_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="Can only delete your own messages")
+    await db.messages.delete_one({"message_id": message_id})
+    chat = await db.chats.find_one({"chat_id": msg["chat_id"]}, {"_id": 0})
+    # re-compute chat preview from latest remaining message
+    if chat:
+        latest = await db.messages.find({"chat_id": msg["chat_id"]}, {"_id": 0}).sort("created_at", -1).limit(1).to_list(1)
+        if latest:
+            m = latest[0]
+            preview = "📷 Photo" if m.get("image") and not m.get("text") else (m.get("text") or "")
+            await db.chats.update_one({"chat_id": msg["chat_id"]}, {"$set": {"last_message": preview[:200], "last_message_at": m["created_at"], "last_sender_id": m["sender_id"]}})
+        else:
+            await db.chats.update_one({"chat_id": msg["chat_id"]}, {"$set": {"last_message": None, "last_sender_id": None}})
+        await manager.broadcast_to_chat(chat["members"], {
+            "type": "message_deleted",
+            "chat_id": msg["chat_id"],
+            "message_id": message_id,
+        })
+    return {"ok": True}
+
+
+@api_router.delete("/chats/{chat_id}")
+async def delete_chat(chat_id: str, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    chat = await db.chats.find_one({"chat_id": chat_id, "members": user["user_id"]}, {"_id": 0})
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    members = list(chat["members"])
+    remaining = [m for m in members if m != user["user_id"]]
+    if len(remaining) <= 1 or not chat.get("is_group"):
+        # 1-on-1 or last-member group: fully delete chat + messages
+        await db.messages.delete_many({"chat_id": chat_id})
+        await db.chats.delete_one({"chat_id": chat_id})
+    else:
+        # group with others still in: just leave
+        await db.chats.update_one({"chat_id": chat_id}, {"$set": {"members": remaining}})
+    await manager.broadcast_to_chat(members, {
+        "type": "chat_deleted",
+        "chat_id": chat_id,
+        "by": user["user_id"],
+    })
+    return {"ok": True}
+
+
+@api_router.patch("/me")
+async def update_me(body: UpdateProfileBody, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    patch: dict = {}
+    if body.name is not None:
+        n = body.name.strip()
+        if n:
+            patch["name"] = n[:80]
+    if body.picture is not None:
+        patch["picture"] = body.picture  # base64 or null
+    if patch:
+        await db.users.update_one({"user_id": user["user_id"]}, {"$set": patch})
+    updated = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    # Broadcast profile change to everyone who shares a chat
+    chats = await db.chats.find({"members": user["user_id"]}, {"_id": 0, "members": 1}).to_list(500)
+    contacts: set = set()
+    for c in chats:
+        for m in c["members"]:
+            if m != user["user_id"]:
+                contacts.add(m)
+    for uid in contacts:
+        await manager.send(uid, {"type": "profile_updated", "user": _clean_user(updated)})
+    return _clean_user(updated)
+
+
 @api_router.post("/chats/mark-all-read")
 async def mark_all_read(authorization: Optional[str] = Header(None)):
     user = await get_current_user(authorization)
@@ -415,6 +531,7 @@ def _serialize_msg(m: dict) -> dict:
         "text": m.get("text"),
         "image": m.get("image"),
         "created_at": m["created_at"].isoformat() if isinstance(m["created_at"], datetime) else m["created_at"],
+        "edited_at": m["edited_at"].isoformat() if isinstance(m.get("edited_at"), datetime) else m.get("edited_at"),
         "read_by": m.get("read_by", []),
         "client_id": m.get("client_id"),
     }

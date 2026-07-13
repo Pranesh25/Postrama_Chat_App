@@ -10,6 +10,7 @@ import { useAuth } from '@/src/context/AuthContext';
 import { useChat, Message } from '@/src/context/ChatContext';
 import { Avatar } from '@/src/components/Avatar';
 import { AudioBubble, useMessageSpeech } from '@/src/components/AudioBubble';
+import { MessageActionsSheet } from '@/src/components/MessageActionsSheet';
 import { theme } from '@/src/theme';
 
 function timeStr(iso: string) {
@@ -30,12 +31,14 @@ export default function ChatRoom() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const chatId = id as string;
   const { user } = useAuth();
-  const { chats, messages, loadMessages, sendMessage, markRead, sendTyping, typing } = useChat();
+  const { chats, messages, loadMessages, sendMessage, editMessage, deleteMessage, markRead, sendTyping, typing, setActiveChatId } = useChat();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [invisible, setInvisible] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [selectedMsg, setSelectedMsg] = useState<Message | null>(null);
   const listRef = useRef<FlatList>(null);
   const speech = useMessageSpeech();
   const speechStop = speech.stop;
@@ -49,6 +52,7 @@ export default function ChatRoom() {
   useEffect(() => { loadMessages(chatId); }, [chatId, loadMessages]);
   useEffect(() => { if (list.length > 0) markRead(chatId); }, [list.length, chatId, markRead]);
   useEffect(() => { if (!invisible) speechStop(); }, [invisible, speechStop]);
+  useEffect(() => { setActiveChatId(chatId); return () => setActiveChatId(null); }, [chatId, setActiveChatId]);
 
   const scrollToEnd = () => setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 50);
 
@@ -56,12 +60,35 @@ export default function ChatRoom() {
     const t = text.trim();
     if (!t || sending) return;
     setSending(true);
-    setText('');
     try { await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
     sendTyping(chatId, false);
-    await sendMessage(chatId, t);
+    if (editingId) {
+      await editMessage(editingId, t);
+      setEditingId(null);
+    } else {
+      await sendMessage(chatId, t);
+    }
+    setText('');
     scrollToEnd();
     setSending(false);
+  };
+
+  const openActions = (m: Message) => {
+    try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch {}
+    setSelectedMsg(m);
+  };
+
+  const onDeleteSelected = () => {
+    if (!selectedMsg) return;
+    deleteMessage(selectedMsg.message_id);
+    setSelectedMsg(null);
+  };
+
+  const onEditSelected = () => {
+    if (!selectedMsg || !selectedMsg.text) return;
+    setEditingId(selectedMsg.message_id);
+    setText(selectedMsg.text);
+    setSelectedMsg(null);
   };
 
   const onPickImage = async () => {
@@ -97,7 +124,12 @@ export default function ChatRoom() {
     // In invisible mode: transform text messages into audio bubbles.
     if (invisible && item.text) {
       return (
-        <View style={[styles.msgRow, mine ? styles.msgRight : styles.msgLeft]}>
+        <Pressable
+          onLongPress={() => openActions(item)}
+          delayLongPress={280}
+          style={[styles.msgRow, mine ? styles.msgRight : styles.msgLeft]}
+          testID={`msg-row-${item.message_id}`}
+        >
           {!mine && chat?.is_group && (
             <View style={{ width: 32, marginRight: 8 }}>
               {showAvatar && <Avatar name={senderInfo?.name} uri={senderInfo?.picture} size={32} />}
@@ -111,12 +143,17 @@ export default function ChatRoom() {
             onToggle={speech.toggle}
             timeLabel={timeStr(item.created_at)}
           />
-        </View>
+        </Pressable>
       );
     }
 
     return (
-      <View style={[styles.msgRow, mine ? styles.msgRight : styles.msgLeft]}>
+      <Pressable
+        onLongPress={() => openActions(item)}
+        delayLongPress={280}
+        style={[styles.msgRow, mine ? styles.msgRight : styles.msgLeft]}
+        testID={`msg-row-${item.message_id}`}
+      >
         {!mine && chat?.is_group && (
           <View style={{ width: 32, marginRight: 8 }}>
             {showAvatar && <Avatar name={senderInfo?.name} uri={senderInfo?.picture} size={32} />}
@@ -133,6 +170,9 @@ export default function ChatRoom() {
             <Text style={[styles.msgText, mine && { color: '#fff' }]}>{item.text}</Text>
           )}
           <View style={styles.msgMeta}>
+            {item.edited_at && (
+              <Text style={[styles.msgTime, mine && { color: 'rgba(255,255,255,0.75)' }, { fontStyle: 'italic' }]}>edited</Text>
+            )}
             <Text style={[styles.msgTime, mine && { color: 'rgba(255,255,255,0.75)' }]}>{timeStr(item.created_at)}</Text>
             {mine && (
               item.pending
@@ -143,7 +183,7 @@ export default function ChatRoom() {
             )}
           </View>
         </View>
-      </View>
+      </Pressable>
     );
   };
 
@@ -235,23 +275,44 @@ export default function ChatRoom() {
         />
 
         <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, 8) }]}>
-          <Pressable testID="attach-image-button" onPress={onPickImage} style={styles.attachBtn}>
-            <Ionicons name="image-outline" size={22} color={theme.color.onSurfaceTertiary} />
-          </Pressable>
-          <TextInput
-            testID="message-input"
-            value={text}
-            onChangeText={onChangeText}
-            placeholder="Message"
-            placeholderTextColor={theme.color.onSurfaceTertiary}
-            style={styles.input}
-            multiline
-          />
-          <Pressable testID="send-button" onPress={onSend} disabled={!text.trim() || sending} style={[styles.sendBtn, (!text.trim() || sending) && { opacity: 0.4 }]}>
-            {sending ? <ActivityIndicator color="#fff" size="small" /> : <Ionicons name="arrow-up" size={22} color="#fff" />}
-          </Pressable>
+          {editingId && (
+            <View style={styles.editingBar} testID="editing-bar">
+              <Ionicons name="create-outline" size={16} color={theme.color.brand} />
+              <Text style={styles.editingText} numberOfLines={1}>Editing message…</Text>
+              <Pressable testID="cancel-edit-button" onPress={() => { setEditingId(null); setText(''); }} style={styles.editingCancel}>
+                <Ionicons name="close" size={16} color={theme.color.onSurfaceTertiary} />
+              </Pressable>
+            </View>
+          )}
+          <View style={styles.composerRow}>
+            <Pressable testID="attach-image-button" onPress={onPickImage} style={styles.attachBtn} disabled={!!editingId}>
+              <Ionicons name="image-outline" size={22} color={editingId ? theme.color.borderStrong : theme.color.onSurfaceTertiary} />
+            </Pressable>
+            <TextInput
+              testID="message-input"
+              value={text}
+              onChangeText={onChangeText}
+              placeholder={editingId ? 'Edit message' : 'Message'}
+              placeholderTextColor={theme.color.onSurfaceTertiary}
+              style={styles.input}
+              multiline
+            />
+            <Pressable testID="send-button" onPress={onSend} disabled={!text.trim() || sending} style={[styles.sendBtn, (!text.trim() || sending) && { opacity: 0.4 }]}>
+              {sending ? <ActivityIndicator color="#fff" size="small" /> : <Ionicons name={editingId ? 'checkmark' : 'arrow-up'} size={22} color="#fff" />}
+            </Pressable>
+          </View>
         </View>
       </KeyboardAvoidingView>
+
+      <MessageActionsSheet
+        visible={!!selectedMsg}
+        onClose={() => setSelectedMsg(null)}
+        canEdit={selectedMsg?.sender_id === user?.user_id && !!selectedMsg?.text}
+        canDelete={selectedMsg?.sender_id === user?.user_id}
+        messageText={selectedMsg?.text}
+        onEdit={onEditSelected}
+        onDelete={onDeleteSelected}
+      />
     </SafeAreaView>
   );
 }
@@ -275,7 +336,11 @@ const styles = StyleSheet.create({
   msgMeta: { flexDirection: 'row', alignItems: 'center', gap: 4, justifyContent: 'flex-end', marginTop: 2 },
   msgTime: { fontSize: 10, color: theme.color.onSurfaceTertiary, fontFamily: theme.font.body },
   emptyChat: { textAlign: 'center', color: theme.color.onSurfaceTertiary, marginTop: 60, fontFamily: theme.font.body },
-  composer: { flexDirection: 'row', alignItems: 'flex-end', paddingHorizontal: theme.space.md, paddingTop: theme.space.sm, backgroundColor: theme.color.surfaceSecondary, borderTopWidth: 1, borderTopColor: theme.color.divider, gap: 8 },
+  composer: { paddingHorizontal: theme.space.md, paddingTop: theme.space.sm, backgroundColor: theme.color.surfaceSecondary, borderTopWidth: 1, borderTopColor: theme.color.divider },
+  composerRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
+  editingBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 8, backgroundColor: theme.color.brandTertiary, borderRadius: 12 },
+  editingText: { flex: 1, color: theme.color.onSurface, fontFamily: theme.font.body, fontSize: 13, fontWeight: '600' },
+  editingCancel: { padding: 4 },
   attachBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   input: { flex: 1, minHeight: 40, maxHeight: 120, backgroundColor: theme.color.surfaceTertiary, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, fontFamily: theme.font.body, fontSize: 15, color: theme.color.onSurface },
   sendBtn: { width: 42, height: 42, borderRadius: 21, backgroundColor: theme.color.brand, alignItems: 'center', justifyContent: 'center' },
