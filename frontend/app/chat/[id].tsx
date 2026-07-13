@@ -17,6 +17,15 @@ function timeStr(iso: string) {
   return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
+function initials(name: string): string {
+  const parts = (name || '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0][0].toUpperCase() + '.';
+  const first = parts[0][0]?.toUpperCase() || '';
+  const last = parts[parts.length - 1][0]?.toUpperCase() || '';
+  return `${first}.${last}.`;
+}
+
 export default function ChatRoom() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const chatId = id as string;
@@ -146,6 +155,10 @@ export default function ChatRoom() {
             <Pressable testID="chat-back-button" onPress={() => router.back()} style={styles.backBtn}>
               <Ionicons name="chevron-back" size={26} color={theme.color.onSurface} />
             </Pressable>
+            <View style={{ flex: 1, marginLeft: theme.space.sm }}>
+              <Text style={styles.headerName} numberOfLines={1}>{initials(title)}</Text>
+              <Text style={styles.headerSub}>🔇 Invisible mode</Text>
+            </View>
             <Pressable
               testID="invisible-toggle"
               onPress={() => {
@@ -156,10 +169,6 @@ export default function ChatRoom() {
             >
               <Ionicons name="eye-off" size={18} color="#fff" />
             </Pressable>
-            <View style={{ flex: 1, marginLeft: theme.space.md }}>
-              <Text style={styles.headerName} numberOfLines={1}>{title}</Text>
-              <Text style={styles.headerSub}>🔇 Invisible mode</Text>
-            </View>
           </>
         ) : (
           <>
