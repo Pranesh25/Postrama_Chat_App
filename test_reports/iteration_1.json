@@ -1,0 +1,40 @@
+{
+  "summary": "Backend + WS testing pass 1 for Bubble chat MVP. 20/20 pytest tests PASSED (100%). All REST endpoints (health, /me, logout, users/search, chats CRUD with 1-1 reuse, group chat, messages text+image, empty-rejection, foreign-chat 404, ordering, read/unread), WebSocket auth-close (4401), real-time message + typing broadcast, and presence online/offline all working. MongoDB _id is properly excluded from every JSON response we inspected. Login screen renders with correct testID.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/auth/me", "issue": "Dead endpoint: handler calls auth_me_impl(user=None) which just `pass`, so it always returns null. It is not used by frontend (frontend uses /api/me) but should be removed or wired up to avoid confusion."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/conftest.py",
+    "/app/backend/tests/test_bubble_chat.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Remove or implement the stub `GET /api/auth/me` handler in server.py (lines 161-167) — currently returns null.",
+    "Consider adding `client_id` to the `_serialize_msg` return + a unique index on (chat_id, client_id) to make offline-queue retries truly idempotent (currently client_id is stored but duplicates are not deduped)."
+  ],
+  "critical_code_review_comments": [
+    "server.py has two overlapping 'who am I' endpoints — /api/auth/me (broken, returns null) and /api/me (works). Delete the broken one.",
+    "Offline queue support is only partial: `client_id` is persisted on messages but there is no upsert-by-client_id logic, so a client that retries a queued message after network recovery will create duplicates.",
+    "Presence broadcast on connect/disconnect only reaches users currently in `manager.connections`; that is expected for real-time, but the DB `online` flag can get stuck true if the pod restarts abruptly (no startup reset). Consider clearing `users.online=false` on server startup.",
+    "CORS is `allow_origins=['*']` combined with `allow_credentials=True` — browsers ignore credentialed requests with a wildcard; harmless here since auth uses Bearer, but worth tightening."
+  ],
+  "updated_files": [
+    "/app/backend/tests/conftest.py (new)",
+    "/app/backend/tests/test_bubble_chat.py (new)"
+  ],
+  "success_rate": {"backend": "100% (20/20)", "frontend": "login-screen render verified only (per request)"},
+  "seed_data_creation": "Three test users (TEST_alice/bob/carol) with sessions inserted directly into MongoDB via conftest session fixture; teardown removes users, sessions, chats and messages tagged with those user_ids.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend URL: https://chat-kotlin-react.preview.emergentagent.com. Frontend uses EXPO_PUBLIC_BACKEND_URL (not EXPO_BACKEND_URL). WebSocket at wss://.../api/ws?token=<session_token>. Auth cannot be tested end-to-end because it requires Emergent Google OAuth; seed users/sessions directly in Mongo (see conftest.py `_mk_user`). Session tokens must have tz-aware `expires_at`. Full regression: `pytest /app/backend/tests/test_bubble_chat.py -v`.",
+  "rca_of_issue": "N/A — no bugs blocking MVP. Only cosmetic dead endpoint (/api/auth/me) and partial offline-queue idempotency noted."
+}

@@ -1,0 +1,26 @@
+export const theme = {
+  color: {
+    surface: '#FCFAF8',
+    onSurface: '#1A1A1A',
+    surfaceSecondary: '#FFFFFF',
+    onSurfaceSecondary: '#2D2D2D',
+    surfaceTertiary: '#F2EFEA',
+    onSurfaceTertiary: '#595959',
+    brand: '#FF6B4A',
+    brandSecondary: '#FFB4A3',
+    brandTertiary: '#FFEBED',
+    onBrand: '#FFFFFF',
+    success: '#4CAF50',
+    error: '#E53935',
+    border: '#EAE6E1',
+    borderStrong: '#D4CEC7',
+    divider: '#F0ECE7',
+    muted: '#8A8580',
+  },
+  space: { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32, xxxl: 48 },
+  radius: { sm: 8, md: 16, lg: 24, pill: 999 },
+  font: {
+    display: 'Fredoka',
+    body: 'Nunito',
+  },
+};

@@ -1,33 +1,45 @@
-import { Stack } from "expo-router";
-import * as SplashScreen from "expo-splash-screen";
-import { useEffect } from "react";
-import { LogBox } from "react-native";
+import { Stack } from 'expo-router';
+import * as SplashScreen from 'expo-splash-screen';
+import { useEffect, useState } from 'react';
+import { LogBox } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import * as Font from 'expo-font';
+import { useIconFonts } from '@/src/hooks/use-icon-fonts';
+import { AuthProvider } from '@/src/context/AuthContext';
+import { ChatProvider } from '@/src/context/ChatContext';
 
-import { useIconFonts } from "@/src/hooks/use-icon-fonts";
-
-
-// Disable logbox errors etc so that users can see the app
-// and agent works as expected.
-LogBox.ignoreAllLogs(true)
-
-// Keep the native splash visible from cold start until icon fonts register.
-// Required because @expo/vector-icons' componentDidMount fallback fires
-// Font.loadAsync against a broken vendor path if any <Icon> mounts before
-// the family is registered — which throws on Android Expo Go.
+LogBox.ignoreAllLogs(true);
 SplashScreen.preventAutoHideAsync();
 
+async function loadCustomFonts() {
+  try {
+    await Font.loadAsync({
+      Fredoka: 'https://fonts.gstatic.com/s/fredoka/v14/X7nP4b87HvSqjb_WIi2yDCRwoQ_k7367_B-i2yQag0-mac3O8SLMFuOL.ttf',
+      Nunito: 'https://fonts.gstatic.com/s/nunito/v26/XRXV3I6Li01BKofINeaBTMnFcQIG.ttf',
+    });
+  } catch {}
+}
+
 export default function RootLayout() {
-  const [loaded, error] = useIconFonts();
+  const [iconsLoaded, iconError] = useIconFonts();
+  const [fontsReady, setFontsReady] = useState(false);
+
+  useEffect(() => { loadCustomFonts().finally(() => setFontsReady(true)); }, []);
 
   useEffect(() => {
-    if (loaded || error) {
-      SplashScreen.hideAsync();
-    }
-  }, [loaded, error]);
+    if ((iconsLoaded || iconError) && fontsReady) SplashScreen.hideAsync();
+  }, [iconsLoaded, iconError, fontsReady]);
 
-  // If the CDN is unreachable we fall through on error rather than wedging
-  // the app — icons will tofu, but the app still boots.
-  if (!loaded && !error) return null;
+  if (!iconsLoaded && !iconError) return null;
+  if (!fontsReady) return null;
 
-  return <Stack screenOptions={{ headerShown: false }} />;
+  return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <AuthProvider>
+        <ChatProvider>
+          <Stack screenOptions={{ headerShown: false, animation: 'slide_from_right' }} />
+        </ChatProvider>
+      </AuthProvider>
+    </GestureHandlerRootView>
+  );
 }
