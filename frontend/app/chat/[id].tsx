@@ -28,7 +28,8 @@ export default function ChatRoom() {
   const [sending, setSending] = useState(false);
   const [invisible, setInvisible] = useState(false);
   const listRef = useRef<FlatList>(null);
-  const { playingId, toggle: togglePlay, stop: stopPlay } = useMessageSpeech();
+  const speech = useMessageSpeech();
+  const speechStop = speech.stop;
 
   const chat = useMemo(() => chats.find((c) => c.chat_id === chatId), [chats, chatId]);
   const other = chat && !chat.is_group ? chat.members.find((m) => m.user_id !== user?.user_id) : null;
@@ -38,8 +39,7 @@ export default function ChatRoom() {
 
   useEffect(() => { loadMessages(chatId); }, [chatId, loadMessages]);
   useEffect(() => { if (list.length > 0) markRead(chatId); }, [list.length, chatId, markRead]);
-  useEffect(() => { if (!invisible) stopPlay(); }, [invisible, stopPlay]);
-  useEffect(() => () => stopPlay(), [stopPlay]);
+  useEffect(() => { if (!invisible) speechStop(); }, [invisible, speechStop]);
 
   const scrollToEnd = () => setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 50);
 
@@ -98,8 +98,8 @@ export default function ChatRoom() {
             text={item.text}
             mine={mine}
             seed={item.message_id}
-            currentPlayingId={playingId}
-            onToggle={togglePlay}
+            playState={speech.state}
+            onToggle={speech.toggle}
             timeLabel={timeStr(item.created_at)}
           />
         </View>
@@ -141,54 +141,72 @@ export default function ChatRoom() {
   return (
     <SafeAreaView style={styles.container} edges={['top']} testID="chat-room">
       <View style={styles.header}>
-        <Pressable testID="chat-back-button" onPress={() => router.back()} style={styles.backBtn}>
-          <Ionicons name="chevron-back" size={26} color={theme.color.onSurface} />
-        </Pressable>
-        {chat?.is_group ? (
-          <View style={styles.groupHeaderAvatar}><Ionicons name="people" size={20} color="#fff" /></View>
+        {invisible ? (
+          <>
+            <Pressable testID="chat-back-button" onPress={() => router.back()} style={styles.backBtn}>
+              <Ionicons name="chevron-back" size={26} color={theme.color.onSurface} />
+            </Pressable>
+            <Pressable
+              testID="invisible-toggle"
+              onPress={() => {
+                setInvisible(false);
+                try { Haptics.selectionAsync(); } catch {}
+              }}
+              style={[styles.invisibleBtn, styles.invisibleBtnOn]}
+            >
+              <Ionicons name="eye-off" size={18} color="#fff" />
+            </Pressable>
+            <View style={{ flex: 1, marginLeft: theme.space.md }}>
+              <Text style={styles.headerName} numberOfLines={1}>{title}</Text>
+              <Text style={styles.headerSub}>🔇 Invisible mode</Text>
+            </View>
+          </>
         ) : (
-          <Avatar name={other?.name} uri={other?.picture} size={40} online={!!other?.online} />
+          <>
+            <Pressable testID="chat-back-button" onPress={() => router.back()} style={styles.backBtn}>
+              <Ionicons name="chevron-back" size={26} color={theme.color.onSurface} />
+            </Pressable>
+            {chat?.is_group ? (
+              <View style={styles.groupHeaderAvatar}><Ionicons name="people" size={20} color="#fff" /></View>
+            ) : (
+              <Avatar name={other?.name} uri={other?.picture} size={40} online={!!other?.online} />
+            )}
+            <View style={{ flex: 1, marginLeft: theme.space.md }}>
+              <Text style={styles.headerName} numberOfLines={1}>{title}</Text>
+              <Text style={styles.headerSub}>
+                {typingUsers.length > 0
+                  ? 'typing…'
+                  : chat?.is_group
+                    ? `${chat.members.length} members`
+                    : other?.online ? 'online' : 'offline'}
+              </Text>
+            </View>
+            <Pressable
+              testID="call-audio-button"
+              onPress={() => Alert.alert('Audio call', 'Voice calls are coming soon.')}
+              style={styles.headerIconBtn}
+            >
+              <Ionicons name="call" size={20} color={theme.color.onSurface} />
+            </Pressable>
+            <Pressable
+              testID="call-video-button"
+              onPress={() => Alert.alert('Video call', 'Video calls are coming soon.')}
+              style={styles.headerIconBtn}
+            >
+              <Ionicons name="videocam" size={22} color={theme.color.onSurface} />
+            </Pressable>
+            <Pressable
+              testID="invisible-toggle"
+              onPress={() => {
+                setInvisible(true);
+                try { Haptics.selectionAsync(); } catch {}
+              }}
+              style={styles.invisibleBtn}
+            >
+              <Ionicons name="eye-outline" size={18} color={theme.color.onSurface} />
+            </Pressable>
+          </>
         )}
-        <View style={{ flex: 1, marginLeft: theme.space.md }}>
-          <Text style={styles.headerName} numberOfLines={1}>{title}</Text>
-          <Text style={styles.headerSub}>
-            {typingUsers.length > 0
-              ? 'typing…'
-              : invisible
-                ? '🔇 Invisible mode'
-                : chat?.is_group
-                  ? `${chat.members.length} members`
-                  : other?.online ? 'online' : 'offline'}
-          </Text>
-        </View>
-        <Pressable
-          testID="call-audio-button"
-          onPress={() => Alert.alert('Audio call', 'Voice calls are coming soon.')}
-          style={styles.headerIconBtn}
-        >
-          <Ionicons name="call" size={20} color={theme.color.onSurface} />
-        </Pressable>
-        <Pressable
-          testID="call-video-button"
-          onPress={() => Alert.alert('Video call', 'Video calls are coming soon.')}
-          style={styles.headerIconBtn}
-        >
-          <Ionicons name="videocam" size={22} color={theme.color.onSurface} />
-        </Pressable>
-        <Pressable
-          testID="invisible-toggle"
-          onPress={() => {
-            setInvisible((v) => !v);
-            try { Haptics.selectionAsync(); } catch {}
-          }}
-          style={[styles.invisibleBtn, invisible && styles.invisibleBtnOn]}
-        >
-          <Ionicons
-            name={invisible ? 'eye-off' : 'eye-outline'}
-            size={18}
-            color={invisible ? '#fff' : theme.color.onSurface}
-          />
-        </Pressable>
       </View>
 
       <KeyboardAvoidingView
